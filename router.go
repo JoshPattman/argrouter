@@ -12,18 +12,18 @@ type Router struct {
 	runFuncs []func([]string) (bool, string, error)
 }
 
-func (r *Router) Run(args []string) error {
+func (r *Router) Run(args []string) (string, error) {
 	for _, rf := range r.runFuncs {
 		if ok, cmdName, err := rf(args); err != nil {
-			return fmt.Errorf("failed to parse arguments for command '%s': %v", cmdName, err)
+			return cmdName, fmt.Errorf("failed to parse arguments for command '%s': %v", cmdName, err)
 		} else if ok {
-			return nil
+			return cmdName, nil
 		}
 	}
-	return fmt.Errorf("could not find matching command for the arguments '%s'", args)
+	return "", fmt.Errorf("could not find matching command for the arguments '%s'", args)
 }
 
-func (r *Router) RunOS() error {
+func (r *Router) RunOS() (string, error) {
 	return r.Run(os.Args[1:])
 }
 

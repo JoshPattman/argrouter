@@ -10,7 +10,7 @@ func parseTestArgs(def testOptions, args ...string) (testArgs, testOptions, erro
 	var resultArgs testArgs
 	var resultOptions testOptions
 	Route(r, "test", func(x testOptions, y testArgs) { resultArgs, resultOptions = y, x }, def)
-	err := r.Run(args)
+	_, err := r.Run(args)
 	return resultArgs, resultOptions, err
 }
 
