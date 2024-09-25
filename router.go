@@ -8,21 +8,19 @@ import (
 	"strings"
 )
 
-type Nil struct{}
-
 type Router struct {
-	runFuncs []func([]string) (bool, error)
+	runFuncs []func([]string) (bool, string, error)
 }
 
 func (r *Router) Run(args []string) error {
 	for _, rf := range r.runFuncs {
-		if ok, err := rf(args); err != nil {
-			return err
+		if ok, cmdName, err := rf(args); err != nil {
+			return fmt.Errorf("failed to parse arguments for command '%s': %v", cmdName, err)
 		} else if ok {
 			return nil
 		}
 	}
-	return fmt.Errorf("could not find matching command")
+	return fmt.Errorf("could not find matching command for the arguments '%s'", args)
 }
 
 func (r *Router) RunOS() error {
@@ -34,27 +32,28 @@ func NewRouter() *Router {
 }
 
 func Route[T, U any](r *Router, command string, handle func(options T, args U), defaultOptions T) {
-	r.runFuncs = append(r.runFuncs, func(argsStr []string) (bool, error) {
+	r.runFuncs = append(r.runFuncs, func(argsStr []string) (bool, string, error) {
 		commandFeilds := strings.Fields(command)
 		if len(commandFeilds) > len(argsStr) {
-			return false, nil
+			return false, "", nil
 		}
 		for i := range commandFeilds {
 			if commandFeilds[i] != argsStr[i] {
-				return false, nil
+				return false, "", nil
 			}
 		}
 		remainingArgs := argsStr[len(commandFeilds):]
+		commandName := strings.Join(commandFeilds, " ")
 		// Parse optional args
 		options := defaultOptions
 		pairs, remainingArgs, err := kvPairs(remainingArgs)
 		if err != nil {
-			return true, err
+			return true, commandName, err
 		}
 		for k, v := range pairs {
-			err := parseIntoNameStruct(v, &options, "opt", k)
+			err := parseIntoOptStruct(v, &options, k)
 			if err != nil {
-				return true, err
+				return true, commandName, err
 			}
 		}
 
@@ -62,18 +61,18 @@ func Route[T, U any](r *Router, command string, handle func(options T, args U), 
 		var args U
 		expectedNum := reflect.ValueOf(args).NumField()
 		if len(remainingArgs) != expectedNum {
-			return true, fmt.Errorf("expected %d args but got %d", expectedNum, len(remainingArgs))
+			return true, commandName, fmt.Errorf("expected %d args but got %d", expectedNum, len(remainingArgs))
 		}
 		for i := range expectedNum {
 			err := parseIntoNumberStruct(remainingArgs[i], &args, i)
 			if err != nil {
-				return true, err
+				return true, commandName, err
 			}
 		}
 
 		// Handle
 		handle(options, args)
-		return true, nil
+		return true, commandName, nil
 	})
 }
 
@@ -99,20 +98,20 @@ func kvPairs(args []string) (map[string]string, []string, error) {
 	}
 
 	if !waitingForDash {
-		return nil, nil, fmt.Errorf("argument %s got no value", lastName)
+		return nil, nil, fmt.Errorf("argument %s was provided no value", lastName)
 	}
 	return result, []string{}, nil
 }
 
 // parseIntoStruct parses the provided string into the struct field that matches the given tag name and value.
-func parseIntoNameStruct(input string, ptrToStruct interface{}, tagName, tagValue string) error {
+func parseIntoOptStruct(input string, ptrToStruct interface{}, tagValue string) error {
 	structValue := reflect.ValueOf(ptrToStruct).Elem()
 	structType := structValue.Type()
 
 	for i := 0; i < structType.NumField(); i++ {
 		field := structType.Field(i)
 		fieldValue := structValue.Field(i)
-		if tag := field.Tag.Get(tagName); tag == tagValue {
+		if tag := field.Tag.Get("opt"); tag == tagValue {
 			toSet, err := parseToValue(input, fieldValue.Kind())
 			if err != nil {
 				return err
@@ -122,7 +121,7 @@ func parseIntoNameStruct(input string, ptrToStruct interface{}, tagName, tagValu
 		}
 	}
 
-	return fmt.Errorf("no field with tag %s=%s found", tagName, tagValue)
+	return fmt.Errorf("invalid option '%s'", tagValue)
 }
 
 // parseIntoStruct parses the provided string into the struct field that matches the given tag name and value.
@@ -138,18 +137,23 @@ func parseIntoNumberStruct(input string, ptrToStruct interface{}, i int) error {
 	return nil
 }
 
-func parseToValue(input string, to reflect.Kind) (any, error) {
+func parseToValue(input string, to reflect.Kind) (val any, err error) {
 	switch to {
 	case reflect.String:
-		return input, nil
+		val, err = input, nil
 	case reflect.Int:
-		i, err := strconv.ParseInt(input, 10, 64)
-		return int(i), err
+		i, err2 := strconv.ParseInt(input, 10, 64)
+		val, err = int(i), err2
 	case reflect.Float64:
-		return strconv.ParseFloat(input, 64)
+		val, err = strconv.ParseFloat(input, 64)
 	case reflect.Bool:
-		return strconv.ParseBool(input)
+		val, err = strconv.ParseBool(input)
 	default:
-		return nil, fmt.Errorf("unsupported type: %s", to)
+		val, err = nil, fmt.Errorf("unsupported type: %s", to)
 	}
+
+	if err != nil {
+		err = fmt.Errorf("failed to parse '%v' to a %v: %v", input, to, err)
+	}
+	return
 }
