@@ -8,6 +8,8 @@ import (
 	"strings"
 )
 
+type Nil struct{}
+
 type Router struct {
 	runFuncs []func([]string) (bool, error)
 }
@@ -31,112 +33,123 @@ func NewRouter() *Router {
 	return &Router{}
 }
 
-func Route[T any](r *Router, command string, handle func(args T), defaultVal T) {
-	r.runFuncs = append(r.runFuncs, func(args []string) (bool, error) {
-		val := defaultVal
+func Route[T, U any](r *Router, command string, handle func(options T, args U), defaultOptions T) {
+	r.runFuncs = append(r.runFuncs, func(argsStr []string) (bool, error) {
 		commandFeilds := strings.Fields(command)
-		if len(commandFeilds) > len(args) {
+		if len(commandFeilds) > len(argsStr) {
 			return false, nil
 		}
 		for i := range commandFeilds {
-			if commandFeilds[i] != args[i] {
+			if commandFeilds[i] != argsStr[i] {
 				return false, nil
 			}
 		}
-		remainingArgs := args[len(commandFeilds):]
-
+		remainingArgs := argsStr[len(commandFeilds):]
 		// Parse optional args
-		remainingArgs, err := trySetOptionalArgs(&val, remainingArgs)
+		options := defaultOptions
+		pairs, remainingArgs, err := kvPairs(remainingArgs)
 		if err != nil {
 			return true, err
 		}
+		for k, v := range pairs {
+			err := parseIntoNameStruct(v, &options, "opt", k)
+			if err != nil {
+				return true, err
+			}
+		}
 
 		// Parse numbered args
-		if err := trySetArgs(&val, remainingArgs); err != nil {
-			return true, err
+		var args U
+		expectedNum := reflect.ValueOf(args).NumField()
+		if len(remainingArgs) != expectedNum {
+			return true, fmt.Errorf("expected %d args but got %d", expectedNum, len(remainingArgs))
 		}
-		handle(val)
+		for i := range expectedNum {
+			err := parseIntoNumberStruct(remainingArgs[i], &args, i)
+			if err != nil {
+				return true, err
+			}
+		}
+
+		// Handle
+		handle(options, args)
 		return true, nil
 	})
 }
 
-func trySetOptionalArgs(into any, vals []string) ([]string, error) {
-	i := 0
-	awaitingName := true
+func kvPairs(args []string) (map[string]string, []string, error) {
+	waitingForDash := true
 	lastName := ""
-	for i < len(vals) {
-		if awaitingName {
-			if strings.HasPrefix(vals[i], "-") {
-				awaitingName = false
-				lastName = strings.TrimPrefix(vals[i], "-")
+	result := make(map[string]string)
+
+	for len(args) > 0 {
+		if waitingForDash {
+			if strings.HasPrefix(args[0], "-") {
+				lastName = strings.TrimPrefix(args[0], "-")
+				waitingForDash = false
 			} else {
-				return vals[i:], nil
+				return result, args, nil
 			}
 		} else {
-			opt, err := findOption(into, lastName)
-			if err != nil {
-				return nil, err
-			}
-			if err := parseInto(vals[i], opt); err != nil {
-				return nil, err
-			}
-			awaitingName = true
+			result[lastName] = args[0]
+			waitingForDash = true
 			lastName = ""
 		}
-		i++
+		args = args[1:]
 	}
-	if !awaitingName {
-		return nil, fmt.Errorf("missing value for option %s", lastName)
+
+	if !waitingForDash {
+		return nil, nil, fmt.Errorf("argument %s got no value", lastName)
 	}
-	return vals[i:], nil
+	return result, []string{}, nil
 }
 
-func trySetArgs(into any, vals []string) error {
-	intoType := reflect.TypeOf(into).Elem()
-	intoPtr := reflect.ValueOf(into).Elem()
-	ni := 0
-	i := 0
-	for i < intoPtr.NumField() {
-		if intoType.Field(i).Tag.Get("opt") == "" {
-			if ni >= len(vals) {
-				return fmt.Errorf("not enough arguments")
-			} else if err := parseInto(vals[ni], intoPtr.Field(i)); err != nil {
+// parseIntoStruct parses the provided string into the struct field that matches the given tag name and value.
+func parseIntoNameStruct(input string, ptrToStruct interface{}, tagName, tagValue string) error {
+	structValue := reflect.ValueOf(ptrToStruct).Elem()
+	structType := structValue.Type()
+
+	for i := 0; i < structType.NumField(); i++ {
+		field := structType.Field(i)
+		fieldValue := structValue.Field(i)
+		if tag := field.Tag.Get(tagName); tag == tagValue {
+			toSet, err := parseToValue(input, fieldValue.Kind())
+			if err != nil {
 				return err
 			}
-			ni++
+			fieldValue.Set(reflect.ValueOf(toSet))
+			return nil
 		}
-		i++
 	}
-	if len(vals) > ni {
-		return fmt.Errorf("too many arguments")
+
+	return fmt.Errorf("no field with tag %s=%s found", tagName, tagValue)
+}
+
+// parseIntoStruct parses the provided string into the struct field that matches the given tag name and value.
+func parseIntoNumberStruct(input string, ptrToStruct interface{}, i int) error {
+	structValue := reflect.ValueOf(ptrToStruct).Elem()
+
+	fieldValue := structValue.Field(i)
+	toSet, err := parseToValue(input, fieldValue.Kind())
+	if err != nil {
+		return err
 	}
+	fieldValue.Set(reflect.ValueOf(toSet))
 	return nil
 }
 
-func parseInto(val string, into reflect.Value) error {
-	switch into.Kind() {
+func parseToValue(input string, to reflect.Kind) (any, error) {
+	switch to {
 	case reflect.String:
-		into.SetString(val)
+		return input, nil
 	case reflect.Int:
-		i, err := strconv.Atoi(val)
-		if err != nil {
-			return err
-		}
-		into.SetInt(int64(i))
+		i, err := strconv.ParseInt(input, 10, 64)
+		return int(i), err
+	case reflect.Float64:
+		return strconv.ParseFloat(input, 64)
+	case reflect.Bool:
+		return strconv.ParseBool(input)
 	default:
-		return fmt.Errorf("unrecognised type to parse: %s", into.Kind().String())
+		return nil, fmt.Errorf("unsupported type: %s", to)
 	}
-	return nil
-}
-
-func findOption(into any, option string) (reflect.Value, error) {
-	intoType := reflect.TypeOf(into).Elem()
-	intoPtr := reflect.ValueOf(into).Elem()
-
-	for i := range intoType.NumField() {
-		if intoType.Field(i).Tag.Get("opt") == option {
-			return intoPtr.Field(i), nil
-		}
-	}
-	return reflect.Value{}, fmt.Errorf("failed to find option '%s'", option)
 }
