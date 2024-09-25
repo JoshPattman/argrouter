@@ -15,8 +15,11 @@ func parseTestArgs(def testOptions, args ...string) (testArgs, testOptions, erro
 }
 
 type testOptions struct {
-	Option1 int    `opt:"option-1"`
-	Option2 string `opt:"option-2"`
+	Option1       int     `opt:"option-1"`
+	Option2       string  `opt:"option-2"`
+	Option3       float64 `opt:"option-3"`
+	Option4       bool    `opt:"option-4"`
+	InvalidOption []int   `opt:"invalid"`
 }
 
 type testArgs struct {
@@ -71,6 +74,11 @@ func TestOK(t *testing.T) {
 			testArgs{Arg1: "string", Arg2: -72},
 			testOptions{Option1: 10, Option2: "optional2!"},
 		},
+		{
+			[]string{"test", "-option-3", "-5.3", "-option-4", "true", "string", "-72"},
+			testArgs{Arg1: "string", Arg2: -72},
+			testOptions{Option3: -5.3, Option4: true},
+		},
 	}
 	for _, p := range pairs {
 		resArgs, resOptions, err := parseTestArgs(testOptions{}, p.args...)
@@ -81,5 +89,31 @@ func TestOK(t *testing.T) {
 		}
 		resArgs.assertEq(t, p.expectedArgs)
 		resOptions.assertEq(t, p.expectedOptions)
+	}
+}
+
+func TestInvalid(t *testing.T) {
+	invalidArgs := [][]string{
+		{"test"},
+		{"test", "a"},
+		{"test", "11"},
+		{"test", "a", "b"},
+		{"test", "-option-1", "11", "b"},
+		{"test", "-option-1", "a", "11", "b"},
+		{"test", "-option-1"},
+		{"test", "abc", "11", "b"},
+		{"test2", "11", "b"},
+		{"test", "-njidsnjfnksje", "11", "b"},
+		{"test", "-invalid", "5", "11", "b"},
+		{},
+	}
+
+	for _, args := range invalidArgs {
+		_, _, err := parseTestArgs(testOptions{}, args...)
+		if err == nil {
+			t.Log(args)
+			t.Error("Should have failed but didn't")
+			t.FailNow()
+		}
 	}
 }
