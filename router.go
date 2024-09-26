@@ -1,6 +1,7 @@
 package argrouter
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"reflect"
@@ -9,13 +10,15 @@ import (
 )
 
 type Router struct {
-	runFuncs []func([]string) (bool, string, error)
+	runFuncs []func([]string) (bool, string, error, error)
 }
 
 func (r *Router) Run(args []string) (string, error) {
 	for _, rf := range r.runFuncs {
-		if ok, cmdName, err := rf(args); err != nil {
-			return cmdName, fmt.Errorf("failed to parse arguments for command '%s': %v", cmdName, err)
+		if ok, cmdName, parseErr, funcErr := rf(args); parseErr != nil {
+			return cmdName, errors.Join(fmt.Errorf("failed to parse arguments for command '%s'", cmdName), parseErr)
+		} else if funcErr != nil {
+			return cmdName, errors.Join(fmt.Errorf("failed to run command '%s'", cmdName), funcErr)
 		} else if ok {
 			return cmdName, nil
 		}
@@ -31,15 +34,15 @@ func NewRouter() *Router {
 	return &Router{}
 }
 
-func Route[T, U any](r *Router, command string, handle func(options T, args U), defaultOptions T) {
-	r.runFuncs = append(r.runFuncs, func(argsStr []string) (bool, string, error) {
+func Route[T, U any](r *Router, command string, handle func(options T, args U) error, defaultOptions T) {
+	r.runFuncs = append(r.runFuncs, func(argsStr []string) (attempted bool, name string, parseErr error, runErr error) {
 		commandFeilds := strings.Fields(command)
 		if len(commandFeilds) > len(argsStr) {
-			return false, "", nil
+			return false, "", nil, nil
 		}
 		for i := range commandFeilds {
 			if commandFeilds[i] != argsStr[i] {
-				return false, "", nil
+				return false, "", nil, nil
 			}
 		}
 		remainingArgs := argsStr[len(commandFeilds):]
@@ -48,12 +51,12 @@ func Route[T, U any](r *Router, command string, handle func(options T, args U), 
 		options := defaultOptions
 		pairs, remainingArgs, err := kvPairs(remainingArgs)
 		if err != nil {
-			return true, commandName, err
+			return true, commandName, err, nil
 		}
 		for k, v := range pairs {
 			err := parseIntoOptStruct(v, &options, k)
 			if err != nil {
-				return true, commandName, err
+				return true, commandName, err, nil
 			}
 		}
 
@@ -61,18 +64,18 @@ func Route[T, U any](r *Router, command string, handle func(options T, args U), 
 		var args U
 		expectedNum := reflect.ValueOf(args).NumField()
 		if len(remainingArgs) != expectedNum {
-			return true, commandName, fmt.Errorf("expected %d args but got %d", expectedNum, len(remainingArgs))
+			return true, commandName, fmt.Errorf("expected %d args but got %d", expectedNum, len(remainingArgs)), nil
 		}
 		for i := range expectedNum {
 			err := parseIntoNumberStruct(remainingArgs[i], &args, i)
 			if err != nil {
-				return true, commandName, err
+				return true, commandName, err, nil
 			}
 		}
 
 		// Handle
-		handle(options, args)
-		return true, commandName, nil
+		err = handle(options, args)
+		return true, commandName, nil, err
 	})
 }
 

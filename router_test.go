@@ -9,7 +9,10 @@ func parseTestArgs(def testOptions, args ...string) (testArgs, testOptions, erro
 	r := NewRouter()
 	var resultArgs testArgs
 	var resultOptions testOptions
-	Route(r, "test", func(x testOptions, y testArgs) { resultArgs, resultOptions = y, x }, def)
+	Route(r, "test", func(x testOptions, y testArgs) error {
+		resultArgs, resultOptions = y, x
+		return nil
+	}, def)
 	_, err := r.Run(args)
 	return resultArgs, resultOptions, err
 }
