@@ -6,13 +6,13 @@ import (
 )
 
 func parseTestArgs(def testOptions, args ...string) (testArgs, testOptions, error) {
-	r := NewRouter()
+	r := NewRouter(NoHelp)
 	var resultArgs testArgs
 	var resultOptions testOptions
 	Route(r, "test", func(x testOptions, y testArgs) error {
 		resultArgs, resultOptions = y, x
 		return nil
-	}, def)
+	}, def, "")
 	_, err := r.Run(args)
 	return resultArgs, resultOptions, err
 }
@@ -118,5 +118,116 @@ func TestInvalid(t *testing.T) {
 			t.Error("Should have failed but didn't")
 			t.FailNow()
 		}
+	}
+}
+
+func TestPrecedent(t *testing.T) {
+	{
+		r := NewRouter(NoHelp)
+		val := 0
+		Route(r, "cmd exe com", func(opts struct{}, args struct{}) error {
+			val = 1
+			return nil
+		}, struct{}{}, "")
+		Route(r, "cmd exe", func(opts struct{}, args struct{}) error {
+			val = 2
+			return nil
+		}, struct{}{}, "")
+		Route(r, "cmd", func(opts struct{}, args struct{}) error {
+			val = 3
+			return nil
+		}, struct{}{}, "")
+
+		_, err := r.Run([]string{"cmd", "exe"})
+		if err != nil {
+			t.Error(err)
+			t.FailNow()
+		}
+		if val != 2 {
+			t.Error("wrong command")
+			t.FailNow()
+		}
+	}
+	{
+		r := NewRouter(NoHelp)
+		val := 0
+		Route(r, "cmd", func(opts struct{}, args struct{}) error {
+			val = 3
+			return nil
+		}, struct{}{}, "")
+		Route(r, "cmd exe", func(opts struct{}, args struct{}) error {
+			val = 2
+			return nil
+		}, struct{}{}, "")
+		Route(r, "cmd exe com", func(opts struct{}, args struct{}) error {
+			val = 1
+			return nil
+		}, struct{}{}, "")
+		_, err := r.Run([]string{"cmd", "exe"})
+		if err != nil {
+			t.Error(err)
+			t.FailNow()
+		}
+		if val != 2 {
+			t.Error("wrong command")
+			t.FailNow()
+		}
+		_, err = r.Run([]string{"cmd"})
+		if err != nil {
+			t.Error(err)
+			t.FailNow()
+		}
+		if val != 3 {
+			t.Error("wrong command")
+			t.FailNow()
+		}
+		_, err = r.Run([]string{"cmd", "exe", "com"})
+		if err != nil {
+			t.Error(err)
+			t.FailNow()
+		}
+		if val != 1 {
+			t.Error("wrong command")
+			t.FailNow()
+		}
+	}
+}
+
+func TestHelp(t *testing.T) {
+	helpMsg := ""
+	r := NewRouter(func(s string) { helpMsg = s })
+
+	Route(r, "test a", func(opts, args struct{}) error { return nil }, struct{}{}, "A")
+	Route(r, "test b", func(opts, args struct{}) error { return nil }, struct{}{}, "B")
+	Route(r, "test", func(opts, args struct{}) error { return nil }, struct{}{}, "C")
+
+	fmt.Println("1")
+	_, err := r.Run([]string{"test", "a", "-h"})
+	if err != nil {
+		t.Error(err)
+		t.FailNow()
+	} else if helpMsg != "A" {
+		t.Error("Incorrect help message")
+		t.FailNow()
+	}
+
+	fmt.Println("2")
+	_, err = r.Run([]string{"test", "b", "-h"})
+	if err != nil {
+		t.Error(err)
+		t.FailNow()
+	} else if helpMsg != "B" {
+		t.Error("Incorrect help message")
+		t.FailNow()
+	}
+
+	fmt.Println("3")
+	_, err = r.Run([]string{"test", "-h"})
+	if err != nil {
+		t.Error(err)
+		t.FailNow()
+	} else if helpMsg != "C" {
+		t.Error("Incorrect help message")
+		t.FailNow()
 	}
 }
